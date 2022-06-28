@@ -496,7 +496,6 @@ class NoObstacleNavigationMir100Sim(NoObstacleNavigationMir100, Simulation):
 class NoObstacleNavigationMir100Rob(NoObstacleNavigationMir100):
     real_robot = True
 
-
 class ObstacleAvoidanceMir100(Mir100Env):
     laser_len = 16
 
@@ -714,3 +713,193 @@ class ObstacleAvoidanceMir100Sim(ObstacleAvoidanceMir100, Simulation):
 
 class ObstacleAvoidanceMir100Rob(ObstacleAvoidanceMir100):
     real_robot = True
+
+
+###############################################################################################################################àà
+
+
+class TrajectoryNavigationMir100(Mir100Env):
+    
+    ''' 
+    action space = parametri che modulano la traiettoria
+    ottengo traiettoria da eq foglio e la passo a un io-sfl planner
+    misuro il tempo (la lunghezza sarà sempre uguale)
+    reward 1/len (traj)
+    reward tempo
+    '''
+    
+    laser_len = 0
+    
+    def __init__(self, rs_address=None, **kwargs):
+    
+        self.mir100 = mir100_utils.Mir100()
+        self.elapsed_steps = 0
+        self.observation_space = self._get_observation_space()
+        self.action_space = spaces.Box(low=np.full((2), -1.0), high=np.full((2), 1.0), dtype=np.float32)
+        self.seed()
+        self.distance_threshold = 0.2
+        self.min_target_dist = 1.0
+        # Maximum linear velocity (m/s) of MiR
+        max_lin_vel = 0.5
+        # Maximum angular velocity (rad/s) of MiR
+        max_ang_vel = 0.7
+        self.max_vel = np.array([max_lin_vel, max_ang_vel])
+
+        # Connect to Robot Server
+        if rs_address:
+            self.client = rs_client.Client(rs_address)
+        else:
+            print("WARNING: No IP and Port passed. Simulation will not be started")
+            print("WARNING: Use this only to get environment shape")
+
+    def reset(self, start_pose = None, target_pose = None):
+        """Environment reset.
+
+        Args:
+            start_pose (list[3] or np.array[3]): [x,y,yaw] initial robot position.
+            target_pose (list[3] or np.array[3]): [x,y,yaw] target robot position.
+
+        Returns:
+            np.array: Environment state.
+
+        """
+        self.elapsed_steps = 0
+
+        self.prev_base_reward = None
+
+        # Initialize environment state
+        self.state = np.zeros(self._get_env_state_len())
+        rs_state = np.zeros(self._get_robot_server_state_len())
+
+        # Set Robot starting position
+        if start_pose:
+            assert len(start_pose)==3
+        else:
+            start_pose = self._get_start_pose()
+
+        rs_state[3:6] = start_pose
+
+        # Set target position
+        if target_pose:
+            assert len(target_pose)==3
+        else:
+            target_pose = self._get_target(start_pose)
+        rs_state[0:3] = target_pose
+
+        # Set initial state of the Robot Server
+        state_msg = robot_server_pb2.State(state = rs_state.tolist())
+        if not self.client.set_state_msg(state_msg):
+            raise RobotServerError("set_state")
+
+        # Get Robot Server state
+        rs_state = copy.deepcopy(np.nan_to_num(np.array(self.client.get_state_msg().state)))
+
+        # Check if the length of the Robot Server state received is correct
+        if not len(rs_state)== self._get_robot_server_state_len():
+            raise InvalidStateError("Robot Server state received has wrong length")
+
+        # Convert the initial state from Robot Server format to environment format
+        self.state = self._robot_server_state_to_env_state(rs_state)
+
+        # Check if the environment state is contained in the observation space
+        if not self.observation_space.contains(self.state):
+            raise InvalidStateError()
+
+        return self.state
+
+    def _reward(self, rs_state, action):
+        reward = 0
+        done = False
+        info = {}
+        linear_power = 0
+        angular_power = 0
+
+        # Calculate distance to the target
+        target_coords = np.array([rs_state[0], rs_state[1]])
+        mir_coords = np.array([rs_state[3],rs_state[4]])
+        euclidean_dist_2d = np.linalg.norm(target_coords - mir_coords, axis=-1)
+        
+        if self.starting_euclidean_dist_2d is None:
+            self.starting_euclidean_dist_2d = euclidean_dist_2d
+        
+        # Reward base
+        base_reward = -500*euclidean_dist_2d / self.starting_euclidean_dist_2d
+        # base_reward = -50*euclidean_dist_2d
+        if self.prev_base_reward is not None:
+            reward = base_reward - self.prev_base_reward
+        self.prev_base_reward = base_reward
+
+        # Power used by the motors
+        linear_power = abs(action[0] *0.30)
+        # angular_power = abs(action[1] *0.03)
+        angular_power = abs(action[1] *0.07)
+        reward -= linear_power
+        reward -= angular_power
+        
+        # Increment Reward if Path is Straight
+        angular_velocity = action[1]
+        reward -= abs(angular_velocity * 2)
+
+        # End episode if robot is outside of boundary box
+        if self._robot_outside_of_boundary_box(rs_state[3:5]):
+            reward = -200.0
+            done = True
+            info['final_status'] = 'out of boundary'
+            
+        # If Remain Stuck Near the Goal
+        if (euclidean_dist_2d < self.distance_threshold + 0.3):
+            self.stuck_near_goal += 1.0
+        
+        # The episode terminates with success if the distance between the robot
+        # and the target is less than the distance threshold.
+        if (euclidean_dist_2d < self.distance_threshold):
+            reward = 400.0 - self.stuck_near_goal * 0.7
+            done = True
+            info['final_status'] = 'success'
+
+        if self.elapsed_steps >= self.max_episode_steps:
+            done = True
+            info['final_status'] = 'max_steps_exceeded'
+
+        return reward, done, info
+
+    def step(self, action):
+        
+        # Convert from tf to numpy
+        if type(action).__name__ == 'ndarray': action = action.astype(np.float32)
+        elif type(action).__name__ == 'EagerTensor': action = action.numpy()
+        else: print(f'Action {type(action).__name__} Type Not Recognized')
+
+        self.elapsed_steps += 1
+
+        # Check if the action is within the action space
+        assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
+
+        # Convert environment action to Robot Server action
+        rs_action = copy.deepcopy(action)
+        # Scale action
+        rs_action = np.multiply(action, self.max_vel)
+        # Send action to Robot Server
+        if not self.client.send_action(rs_action.tolist()):
+            raise RobotServerError("send_action")
+
+        # Get state from Robot Server
+        rs_state = self.client.get_state_msg().state
+        # Convert the state from Robot Server format to environment format
+        self.state = self._robot_server_state_to_env_state(rs_state)
+
+        # Check if the environment state is contained in the observation space
+        if not self.observation_space.contains(self.state):
+            raise InvalidStateError()
+
+        # Assign reward
+        reward, done, info = self._reward(rs_state=rs_state, action=action)
+
+        return self.state, reward, done, info
+
+
+class TrajectoryNavigationMir100Sim(TrajectoryNavigationMir100, Simulation):
+    cmd = "roslaunch mir100_robot_server sim_robot_server.launch"
+    def __init__(self, ip=None, lower_bound_port=None, upper_bound_port=None, gui=False, **kwargs):
+        Simulation.__init__(self, self.cmd, ip, lower_bound_port, upper_bound_port, gui, **kwargs)
+        TrajectoryNavigationMir100.__init__(self, rs_address=self.robot_server_ip, **kwargs)
