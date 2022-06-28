@@ -120,7 +120,10 @@ class Mir100Env(gym.Env):
 
     def step(self, action):
         
-        action = action.astype(np.float32)
+        # Convert from tf to numpy
+        if type(action).__name__ == 'ndarray': action = action.astype(np.float32)
+        elif type(action).__name__ == 'EagerTensor': action = action.numpy()
+        else: print(f'Action {type(action).__name__} Type Not Recognized')
 
         self.elapsed_steps += 1
 
@@ -163,6 +166,7 @@ class Mir100Env(gym.Env):
 
         """
 
+        # Create a vector of 3 elements 0.0
         target = [0.0] * 3
         mir_pose = [0.0] * 3
         mir_twist = [0.0] * 2
@@ -209,8 +213,8 @@ class Mir100Env(gym.Env):
             start_pose = self.client.get_state_msg().state[3:6]
         else:
             # Create random starting position
-            x = self.np_random.uniform(low= -2.0, high= 2.0)
-            y = self.np_random.uniform(low= -2.0, high= 2.0)
+            x = self.np_random.uniform(low= -5.0, high= 5.0)
+            y = self.np_random.uniform(low= -5.0, high= 5.0)
             yaw = self.np_random.uniform(low= -np.pi, high= np.pi)
             start_pose = [x,y,yaw]
 
@@ -229,8 +233,8 @@ class Mir100Env(gym.Env):
 
         target_far_enough = False
         while not target_far_enough:
-            x_t = self.np_random.uniform(low= -1.0, high= 1.0)
-            y_t = self.np_random.uniform(low= -1.0, high= 1.0)
+            x_t = self.np_random.uniform(low= -10.0, high= 10.0)
+            y_t = self.np_random.uniform(low= -10.0, high= 10.0)
             yaw_t = 0.0
             target_dist = np.linalg.norm(np.array([x_t,y_t]) - np.array(robot_coordinates[0:2]), axis=-1)
 
@@ -318,8 +322,8 @@ class Mir100Env(gym.Env):
         """
 
         # Dimensions of boundary box in m, the box center corresponds to the map origin
-        width = 20
-        height = 20
+        width = 30
+        height = 30
 
         if np.absolute(robot_coordinates[0]) > (width/2) or \
             np.absolute(robot_coordinates[1] > (height/2)):
@@ -363,7 +367,69 @@ class Mir100Env(gym.Env):
             return False
 
 class NoObstacleNavigationMir100(Mir100Env):
+    
     laser_len = 0
+    stuck_near_goal = 0
+    
+    def reset(self, start_pose = None, target_pose = None):
+        
+        """Environment reset.
+
+        Args:
+            start_pose (list[3] or np.array[3]): [x,y,yaw] initial robot position.
+            target_pose (list[3] or np.array[3]): [x,y,yaw] target robot position.
+
+        Returns:
+            np.array: Environment state.
+
+        """
+        self.elapsed_steps = 0
+
+        self.prev_base_reward = None
+        
+        # Clear Variable
+        self.stuck_near_goal = 0
+        self.starting_euclidean_dist_2d = None
+        
+        # Initialize environment state
+        self.state = np.zeros(self._get_env_state_len())
+        rs_state = np.zeros(self._get_robot_server_state_len())
+
+        # Set Robot starting position
+        if start_pose:
+            assert len(start_pose)==3
+        else:
+            start_pose = self._get_start_pose()
+
+        rs_state[3:6] = start_pose
+
+        # Set target position
+        if target_pose:
+            assert len(target_pose)==3
+        else:
+            target_pose = self._get_target(start_pose)
+        rs_state[0:3] = target_pose
+
+        # Set initial state of the Robot Server
+        state_msg = robot_server_pb2.State(state = rs_state.tolist())
+        if not self.client.set_state_msg(state_msg):
+            raise RobotServerError("set_state")
+
+        # Get Robot Server state
+        rs_state = copy.deepcopy(np.nan_to_num(np.array(self.client.get_state_msg().state)))
+
+        # Check if the length of the Robot Server state received is correct
+        if not len(rs_state)== self._get_robot_server_state_len():
+            raise InvalidStateError("Robot Server state received has wrong length")
+
+        # Convert the initial state from Robot Server format to environment format
+        self.state = self._robot_server_state_to_env_state(rs_state)
+
+        # Check if the environment state is contained in the observation space
+        if not self.observation_space.contains(self.state):
+            raise InvalidStateError()
+
+        return self.state
 
     def _reward(self, rs_state, action):
         reward = 0
@@ -376,29 +442,42 @@ class NoObstacleNavigationMir100(Mir100Env):
         target_coords = np.array([rs_state[0], rs_state[1]])
         mir_coords = np.array([rs_state[3],rs_state[4]])
         euclidean_dist_2d = np.linalg.norm(target_coords - mir_coords, axis=-1)
-
+        
+        if self.starting_euclidean_dist_2d is None:
+            self.starting_euclidean_dist_2d = euclidean_dist_2d
+        
         # Reward base
-        base_reward = -50*euclidean_dist_2d
+        base_reward = -500*euclidean_dist_2d / self.starting_euclidean_dist_2d
+        # base_reward = -50*euclidean_dist_2d
         if self.prev_base_reward is not None:
             reward = base_reward - self.prev_base_reward
         self.prev_base_reward = base_reward
 
         # Power used by the motors
         linear_power = abs(action[0] *0.30)
-        angular_power = abs(action[1] *0.03)
+        # angular_power = abs(action[1] *0.03)
+        angular_power = abs(action[1] *0.07)
         reward -= linear_power
         reward -= angular_power
+        
+        # Increment Reward if Path is Straight
+        angular_velocity = action[1]
+        reward -= abs(angular_velocity * 2)
 
         # End episode if robot is outside of boundary box
         if self._robot_outside_of_boundary_box(rs_state[3:5]):
             reward = -200.0
             done = True
             info['final_status'] = 'out of boundary'
-
+            
+        # If Remain Stuck Near the Goal
+        if (euclidean_dist_2d < self.distance_threshold + 0.3):
+            self.stuck_near_goal += 1.0
+        
         # The episode terminates with success if the distance between the robot
         # and the target is less than the distance threshold.
         if (euclidean_dist_2d < self.distance_threshold):
-            reward = 200.0
+            reward = 400.0 - self.stuck_near_goal * 0.7
             done = True
             info['final_status'] = 'success'
 
