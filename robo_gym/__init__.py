@@ -34,6 +34,16 @@ register(
     entry_point='robo_gym.envs:ObstacleAvoidanceMir100Rob',
 )
 
+register(
+    id='TrajectoryNavigationMir100Sim-v0',
+    entry_point='robo_gym.envs:TrajectoryNavigationMir100Sim',
+)
+
+register(
+    id='TrajectoryNavigationMir100Rob-v0',
+    entry_point='robo_gym.envs:TrajectoryNavigationMir100Rob',
+)
+
 # UR Environments
 register(
     id='EmptyEnvironmentURSim-v0',

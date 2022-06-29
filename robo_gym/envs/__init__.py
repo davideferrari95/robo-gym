@@ -4,6 +4,7 @@ from robo_gym.envs.example.example_env import ExampleEnvSim, ExampleEnvRob
 # MiR100
 from robo_gym.envs.mir100.mir100 import NoObstacleNavigationMir100Sim, NoObstacleNavigationMir100Rob
 from robo_gym.envs.mir100.mir100 import ObstacleAvoidanceMir100Sim, ObstacleAvoidanceMir100Rob
+from robo_gym.envs.mir100.mir100 import TrajectoryNavigationMir100Sim, TrajectoryNavigationMir100Rob
 
 # UR
 from robo_gym.envs.ur.ur_base_env import EmptyEnvironmentURSim, EmptyEnvironmentURRob
