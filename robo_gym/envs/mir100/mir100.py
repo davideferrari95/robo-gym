@@ -876,7 +876,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         import matplotlib.pyplot as plt
         
         x, y = [], []
-        samples = 100000
+        samples = 10000 #100000
         for i in range(0, samples):
             s = i/samples
             x_, y_ = self.s_cubic_polynomial_path(s, xi, yi, xf, yf, αx, αy, βx, βy)
@@ -893,7 +893,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         import matplotlib.pyplot as plt
         
         x, y = [], []
-        samples = 100000
+        samples = 10000 #100000
         for i in range(0, samples):
             t = tf * i/samples
             x_, y_, vx, vy = self.t_cubic_polynomial_path(t, tf, xi, yi, xf, yf, αx, αy, βx, βy)
@@ -903,7 +903,9 @@ class TrajectoryNavigationMir100(Mir100Env):
         plt.scatter(x,y)
         plt.xlim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
         plt.ylim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
-        plt.show()
+        plt.show(block=False) # plt.show()
+        plt.pause(3)
+        plt.close()
     
     def _io_sfl(self, starting_pose, target_pose, action):
         
@@ -1030,6 +1032,43 @@ class TrajectoryNavigationMir100(Mir100Env):
     
     def _io_sfl_2(self, starting_pose, target_pose, action):
         
+        ''' 
+            Path Planning Equations | s € [0,1]
+            xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * (s-1) + βx * s * pow(s-1,2)
+            ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * (s-1) + βy * s * pow(s-1,2)
+            
+            Boundary Conditions
+            x(0) = xi | y(0) = yi
+            x(1) = xf | y(1) = yf
+            
+            Orientation Conditions
+            x'(0) = Ki * cos(θi) | y'(0) = Ki * sin(θi)
+            x'(1) = Kf * cos(θf) | y'(1) = Kf * sin(θf)
+            Ki = Kf = K > 0
+            
+            Orientation Equations
+            αx = K * cos(θf) - 3xf | αy = K * sin(θf) + 3yf
+            βx = K * cos(θi) - 3xi | βy = K * sin(θi) + 3yi
+            
+        '''
+        
+        '''
+            Trajectory Tracking - PD + Feedforward
+            u1 = xd'' + Kp1 * (xd - x) + Kd1 * (xd' - x')
+            u2 = yd'' + Kp2 * (yd - y) + Kd2 * (yd' - y')
+            v' = u1 * cos(θ) + u2 * sin(θ)
+            ω = (u2 * cos(θ) - u1 * sin(θ)) / v
+            Kp1, Kp2, Kd1, Kd2 > 0
+            
+            Trajectory Tracking - IO-SFL
+            xb, yb = (x + b * cos(θ)), (y + b * sin(θ))
+            ex, ey = (x_des - xb), (y_des - yb)
+            Vbx, Vby = (Vx_des + k1 * ex), (Vy_des + k2 * ey)
+            v = Vbx * cos(θ) + Vby * sin(θ)
+            ω = 1/b * (Vby * cos(θ) - Vbx * sin(θ))
+        
+        '''
+        
         # Get Trajectory Parameters
         xi, yi, θi = starting_pose[0], starting_pose[1], starting_pose[2]
         xf, yf, θf = target_pose[0], target_pose[1], target_pose[2]
@@ -1040,7 +1079,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         
         # Initialize IO-SFL Parameters
         b, k1, k2 = 0.2, 2.0, 2.0
-        t, dt, tf = 0.0, 1/10, 20
+        t, dt, tf = 0.0, 1/100, 20
         
         # Compute Trajectory Parameters
         αx = K * cos(θf) - 3 * xf
