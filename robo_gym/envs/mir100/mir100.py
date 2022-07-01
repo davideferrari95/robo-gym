@@ -734,18 +734,20 @@ class TrajectoryNavigationMir100(Mir100Env):
     
     '''
     
-    # Timer Inizialization
-    timer = None
+    laser_len = 0
 
     def __init__(self, rs_address=None, **kwargs):
     
         self.mir100 = mir100_utils.Mir100()
         
         self.elapsed_steps = 0
+        self.min_target_dist = 1.0
         self.observation_space = self._get_observation_space()
         
         # 1 Parameters for Cubic Polynomial (K)
-        self.action_space = spaces.Box(low = -inf, high = inf, dtype = np.float32)
+        self.action_space = spaces.Box(low=np.full((1), 1), high=np.full((1), 1000), dtype=np.float32)
+        
+        # self.action_space = spaces.Box(low = -inf, high = inf, dtype = np.float32)
         # self.action_space = spaces.Box(low=np.full((5), -inf), high=np.full((5), inf), dtype=np.float32)
         
         self.seed()
@@ -780,7 +782,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         self.elapsed_steps = 0
 
         self.prev_base_reward = None
-        self.prev_time = None
+        self.prev_time = 100
 
         # Initialize environment state
         self.state = np.zeros(self._get_env_state_len())
@@ -797,6 +799,9 @@ class TrajectoryNavigationMir100(Mir100Env):
         # Convert Pose To State
         rs_state[3:6] = self.start_pose = start_pose
         rs_state[0:3] = self.target_pose = target_pose
+        print('\n------\n')
+        print(f'Starting Pose | X = {start_pose[0]:.3f} | Y = {start_pose[1]:.3f} | θ = {degrees(start_pose[2]):.3f}')
+        print(f'Target Pose   | X = {target_pose[0]:.3f} | Y = {target_pose[1]:.3f} | θ = {degrees(target_pose[2]):.3f}')
 
         # Set initial state of the Robot Server
         state_msg = robot_server_pb2.State(state = rs_state.tolist())
@@ -821,14 +826,13 @@ class TrajectoryNavigationMir100(Mir100Env):
 
     def _reward(self, rs_state, trajectory_time, action):
         
-        reward = 0
-        done = False
-        info = {}
+        # Variable Initialization        
+        reward, done, info = 0, False, {}
         
         # Base Reward - Positive Reward if New Execution Time is Lower
-        if self.prev_time is not None: 
-            base_reward = 10 * (self.prev_time - trajectory_time)
-        else: base_reward = 0
+        base_reward = 50 * (self.prev_time - trajectory_time)
+        print(f'Trajectory Time: {trajectory_time}')
+        print('\n------\n')
 
         # Update Previous Time
         self.prev_time = trajectory_time
@@ -843,23 +847,78 @@ class TrajectoryNavigationMir100(Mir100Env):
         
         return reward, done, info
     
+    # Compute Cubic Polynomial Path | s € [0,1]
+    def s_cubic_polynomial_path(self, s, xi, yi, xf, yf, αx, αy, βx, βy):
+        
+        xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * (s-1) + βx * s * pow(s-1,2)
+        ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * (s-1) + βy * s * pow(s-1,2)
+    
+        return xs, ys
+    
+    # Compute Cubic Polynomial Path | t € [0,tf]
+    def t_cubic_polynomial_path(self, t_, tf, xi, yi, xf, yf, αx, αy, βx, βy):
+        
+        from scipy import misc
+
+        def x(t): return -pow((t-tf)/tf,3) * xi + pow(t/tf,3) * xf + αx * pow(t/tf,2) * ((t-tf)/tf) + βx * t/tf * pow((t-tf)/tf,2)
+        def y(t): return -pow((t-tf)/tf,3) * yi + pow(t/tf,3) * yf + αy * pow(t/tf,2) * ((t-tf)/tf) + βy * t/tf * pow((t-tf)/tf,2)
+
+        # import sympy as sp
+        # t_ = sp.Symbol('t') 
+        # x = -((t_-tf)/tf)**3 * xi + (t_/tf)**3 * xf + αx * (t_/tf)**2 * ((t_-tf)/tf) + βx * t_/tf * ((t_-tf)/tf)**2
+        # y = -((t_-tf)/tf)**3 * yi + (t_/tf)**3 * yf + αy * (t_/tf)**2 * ((t_-tf)/tf) + βy * t_/tf * ((t_-tf)/tf)**2
+        # dxt = sp.diff(x,t_)
+    
+        return x(t_), y(t_), misc.derivative(x,t_), misc.derivative(y,t_)
+    
+    def s_plot_trajectory(self, xi, yi, xf, yf, αx, αy, βx, βy):
+        
+        import matplotlib.pyplot as plt
+        
+        x, y = [], []
+        samples = 100000
+        for i in range(0, samples):
+            s = i/samples
+            x_, y_ = self.s_cubic_polynomial_path(s, xi, yi, xf, yf, αx, αy, βx, βy)
+            x.append(x_)
+            y.append(y_)
+            
+        plt.scatter(x,y)
+        plt.xlim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
+        plt.ylim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
+        plt.show()
+
+    def t_plot_trajectory(self, tf, xi, yi, xf, yf, αx, αy, βx, βy):
+        
+        import matplotlib.pyplot as plt
+        
+        x, y = [], []
+        samples = 100000
+        for i in range(0, samples):
+            t = tf * i/samples
+            x_, y_, vx, vy = self.t_cubic_polynomial_path(t, tf, xi, yi, xf, yf, αx, αy, βx, βy)
+            x.append(x_)
+            y.append(y_)
+            
+        plt.scatter(x,y)
+        plt.xlim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
+        plt.ylim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
+        plt.show()
+    
     def _io_sfl(self, starting_pose, target_pose, action):
         
         # Get Trajectory Parameters
-        xi = starting_pose[0]
-        yi = starting_pose[1]
-        θi = starting_pose[2]
-        xf = target_pose[0]
-        yf = target_pose[1]
-        θf = target_pose[2]
+        xi, yi, θi = starting_pose[0], starting_pose[1], starting_pose[2]
+        xf, yf, θf = target_pose[0], target_pose[1], target_pose[2]
         
         # Get Path Planning Parameters| 1 Parameters for Cubic Polynomial (K)
         K  = action[0]
+        print(f'K = {K}')
         
         ''' 
-            Trajectory Equations | s € [0,1]
-            xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * pow(s-1,2) + βx * s * pow(s-1,2)
-            ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * pow(s-1,2) + βy * s * pow(s-1,2)
+            Path Planning Equations | s € [0,1]
+            xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * (s-1) + βx * s * pow(s-1,2)
+            ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * (s-1) + βy * s * pow(s-1,2)
             
             Boundary Conditions
             x(0) = xi | y(0) = yi
@@ -868,11 +927,11 @@ class TrajectoryNavigationMir100(Mir100Env):
             Orientation Conditions
             x'(0) = Ki * cos(θi) | y'(0) = Ki * sin(θi)
             x'(1) = Kf * cos(θf) | y'(1) = Kf * sin(θf)
-            Ki = Kf = K
+            Ki = Kf = K > 0
             
             Orientation Equations
-            αx = K * cos(θf) - 3xf | αy = K * sin(θf) - 3yf
-            βx = K * cos(θi) - 3xi | βy = K * sin(θi) - 3yi
+            αx = K * cos(θf) - 3xf | αy = K * sin(θf) + 3yf
+            βx = K * cos(θi) - 3xi | βy = K * sin(θi) + 3yi
             
         '''
         
@@ -880,70 +939,175 @@ class TrajectoryNavigationMir100(Mir100Env):
             Trajectory Tracking - PD + Feedforward
             u1 = xd'' + Kp1 * (xd - x) + Kd1 * (xd' - x')
             u2 = yd'' + Kp2 * (yd - y) + Kd2 * (yd' - y')
+            v' = u1 * cos(θ) + u2 * sin(θ)
+            ω = (u2 * cos(θ) - u1 * sin(θ)) / v
             Kp1, Kp2, Kd1, Kd2 > 0
         
-            Trajectory Tracking - IO-SFL
-            
         '''
         
-        # Compute Trajectory Parameters
-        αx = K * cos(θf) - 3 * xf
-        αy = K * sin(θf) - 3 * yf
-        βx = K * cos(θi) - 3 * xi
-        βy = K * sin(θi) - 3 * yi
-        
         # Initialize IO-SFL Parameters
-        b = 0.5
-        s = 0.0
-        sampling_time = 0.01
-        xb_old = xi 
-        yb_old = yi
+        b = 0.2
+        s, t = 0.0, 0.0
+        ds, dt = 1/10000, 1/10 # 0.1 # 0.05 # 1/500
+        tf = 20
         
-        # Start Timer
-        timer = time.perf_counter()
+        # Compute Trajectory Parameters
+        # αx = K * cos(θf) - 3 * xf
+        # αy = K * sin(θf) - 3 * yf
+        # βx = K * cos(θi) + 3 * xi
+        # βy = K * sin(θi) + 3 * yi
+        αx = K * cos(θf) - 3 * (xf + b*cos(θf))
+        αy = K * sin(θf) - 3 * (yf + b*sin(θf))
+        βx = K * cos(θi) + 3 * (xi + b*cos(θi))
+        βy = K * sin(θi) + 3 * (yi + b*sin(θi))
+    
+        # Plot Trajectory
+        # self.s_plot_trajectory(xi, yi, xf, yf, αx, αy, βx, βy)
+        # self.t_plot_trajectory(tf, xi, yi, xf, yf, αx, αy, βx, βy)
+        self.t_plot_trajectory(tf, xi + b*cos(θi), yi + b*sin(θi), xf + b*cos(θf), yf + b*sin(θf), αx, αy, βx, βy)
         
-        while s < 1:
+        # Starting Time
+        start_time = time.perf_counter()
+        
+        # while s < 1:
+        while t < tf:
+            
+            # Reset Sleep Timer
+            timer = time.perf_counter()
+            
+            # Get state from Robot Server
+            rs_state = self.client.get_state_msg().state
+            actual_pose = rs_state[3:6]
 
-            # Compute Cubic Polynomial Trajectory | s € [0,1]
-            xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * pow(s-1,2) + βx * s * pow(s-1,2)
-            ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * pow(s-1,2) + βy * s * pow(s-1,2)
+            # Get Actual Pose
+            x, y = actual_pose[0], actual_pose[1]
+            θ = actual_pose[2]
+            # print(f'X = {x} | Y = {y} | θ = {θ}')
+
+            # Compute Actual Xb, Yb
+            xb = x + b * cos(θ)
+            yb = y + b * sin(θ)
+            
+            # Increase s | t
+            # s += ds
+            t += dt
+
+            # Compute Cubic Polynomial Trajectory | s € [0,1] | t € [0,tf]
+            # x_des, y_des = self.s_cubic_polynomial_path(s, xi, yi, xf, yf, αx, αy, βx, βy)
+            # x_des, y_des = self.t_cubic_polynomial_path(t, tf, xi, yi, xf, yf, αx, αy, βx, βy)
+            x_des, y_des, Vx, Vy = self.t_cubic_polynomial_path(t, tf, xi + b*cos(θi), yi + b*sin(θi), xf + b*cos(θf), yf + b*sin(θf), αx, αy, βx, βy)
             
             # Linear Trajectory
             # x = ((tf - t)/tf) * x0 + (t/tf) * xf
             # y = ((tf - t)/tf) * y0 + (t/tf) * yf
                         
-            # Get state from Robot Server
-            rs_state = self.client.get_state_msg().state
-            actual_pose = rs_state[3:6]
-            
-            # Get Actual Coordinates
-            x, y, θ = actual_pose
-            
-            # Compute Xb, Yb
-            xb = xs + b * cos(θ)
-            yb = ys + b * sin(θ)
-            
             # Compute Vx, Vy
-            Vx = (xb - xb_old) / sampling_time
-            Vy = (yb - yb_old) / sampling_time
-            xb_old = xb
-            yb_old = yb
+            # Vx, Vy = (x_des - xb) / ds, (y_des - yb) / ds
+            # Vx, Vy = (x_des - xb) / dt, (y_des - yb) / dt
             
             # Compute v and ω
             v = Vx * cos(θ) + Vy * sin(θ)
-            ω = 1/b * (Vx * cos(θ) - Vy * sin(θ))
+            ω = 1/b * (Vy * cos(θ) - Vx * sin(θ))
             
+            # Check Velocity Limits
+            if fabs(v) > self.max_vel[0] or fabs(ω) > self.max_vel[1]:
+                print(f'Velocity Limit Exceeded | v = {v:.5f} | ω = {ω:.5f}')
+                
             # Convert environment action to Robot Server action | Scale action
-            rs_action = np.multiply([v,ω], self.max_vel)
+            # rs_action = np.multiply([v,ω], self.max_vel)
+            rs_action = np.multiply([v,ω], [1.0,1.0])
             # Send action to Robot Server
             if not self.client.send_action(rs_action.tolist()):
                 raise RobotServerError("send_action")
             
-            # Increase s
-            s += sampling_time            
-        
+            # Sleep Remaining Time
+            time.sleep(max(0, dt - (time.perf_counter() - timer)))
+            # time.sleep(max(0, ds - (time.perf_counter() - timer)))
+            # print(f'Computation Time: {time.perf_counter() - timer}')
+            
         # Return Trajectory Time
-        return (time.perf_counter() - timer)
+        return (time.perf_counter() - start_time)
+    
+    def _io_sfl_2(self, starting_pose, target_pose, action):
+        
+        # Get Trajectory Parameters
+        xi, yi, θi = starting_pose[0], starting_pose[1], starting_pose[2]
+        xf, yf, θf = target_pose[0], target_pose[1], target_pose[2]
+        
+        # Get Path Planning Parameters| 1 Parameters for Cubic Polynomial (K)
+        K  = action[0]
+        print(f'K = {K}')
+        
+        # Initialize IO-SFL Parameters
+        b, k1, k2 = 0.2, 2.0, 2.0
+        t, dt, tf = 0.0, 1/10, 20
+        
+        # Compute Trajectory Parameters
+        αx = K * cos(θf) - 3 * xf
+        αy = K * sin(θf) - 3 * yf
+        βx = K * cos(θi) + 3 * xi
+        βy = K * sin(θi) + 3 * yi
+    
+        # Plot Trajectory
+        self.t_plot_trajectory(tf, xi, yi, xf, yf, αx, αy, βx, βy)
+        
+        # Starting Time
+        start_time = time.perf_counter()
+        
+        while t < tf:
+            
+            # Reset Sleep Timer
+            timer = time.perf_counter()
+            
+            # Get state from Robot Server
+            rs_state = self.client.get_state_msg().state
+            actual_pose = rs_state[3:6]
+
+            # Get Actual Pose
+            x, y = actual_pose[0], actual_pose[1]
+            θ = actual_pose[2]
+            # print(f'X = {x} | Y = {y} | θ = {θ}')
+
+            # Compute Actual Xb, Yb
+            xb = x + b * cos(θ)
+            yb = y + b * sin(θ)
+            
+            # Compute Cubic Polynomial Trajectory | t € [0,tf]
+            x_des, y_des, Vx_des, Vy_des = self.t_cubic_polynomial_path(t + dt, tf, xi, yi, xf, yf, αx, αy, βx, βy)
+            
+            # Compute Tracking Error
+            ex, ey = (x_des - xb), (y_des - yb)
+            
+            # Compute Vx_des, Vy_des
+            # Vx_des, Vy_des = ((x_des - x) / dt), ((y_des - y) / dt)
+            
+            # Compute Vbx, Vby
+            Vbx, Vby = (Vx_des + k1 * ex), (Vy_des + k2 * ey)
+            
+            # Compute v and ω
+            v = Vbx * cos(θ) + Vby * sin(θ)
+            ω = 1/b * (Vby * cos(θ) - Vbx * sin(θ))
+            
+            # Check Velocity Limits
+            if fabs(v) > self.max_vel[0] or fabs(ω) > self.max_vel[1]:
+                print(f'Velocity Limit Exceeded | v = {v:.5f} | ω = {ω:.5f}')
+                
+            # Convert environment action to Robot Server action | Scale action
+            # rs_action = np.multiply([v,ω], self.max_vel)
+            rs_action = np.multiply([v,ω], [1.0,1.0])
+            # Send action to Robot Server
+            if not self.client.send_action(rs_action.tolist()):
+                raise RobotServerError("send_action")
+            
+            # Increase t
+            t += dt
+            
+            # Sleep Remaining Time
+            time.sleep(max(0, dt - (time.perf_counter() - timer)))
+            # print(f'Computation Time: {time.perf_counter() - timer}')
+            
+        # Return Trajectory Time
+        return (time.perf_counter() - start_time)
 
     def step(self, action):
         
@@ -958,7 +1122,8 @@ class TrajectoryNavigationMir100(Mir100Env):
         assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
                 
         # IO-SFL - Execute Trajectory
-        trajectory_time = self._io_sfl(self.start_pose, self.target_pose, action)
+        # trajectory_time = self._io_sfl(self.start_pose, self.target_pose, action)
+        trajectory_time = self._io_sfl_2(self.start_pose, self.target_pose, action)
 
         # Get state from Robot Server
         rs_state = self.client.get_state_msg().state
@@ -971,7 +1136,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             raise InvalidStateError()
 
         # Assign reward
-        reward, done, info = self._reward(rs_state=rs_state, action=action)
+        reward, done, info = self._reward(rs_state=rs_state, trajectory_time=trajectory_time, action=action)
 
         return self.state, reward, done, info
 
