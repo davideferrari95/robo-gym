@@ -891,7 +891,8 @@ class TrajectoryNavigationMir100(Mir100Env):
             # print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
             
             # Compute v, ω + Velocity Saturation
-            Vbx_des, Vby_des = tp.velocity_saturation([x, y, θ, v, ω], [x_des, y_des, Vbx_des, Vby_des], dt, b, self.max_vel * 0.7)
+            # Vbx_des, Vby_des = tp.velocity_saturation([x, y, θ, v, ω], [x_des, y_des, Vbx_des, Vby_des], dt, b, self.max_vel * 0.7)
+            Vbx_des, Vby_des = tp.velocity_saturation2(θ, Vbx_des, Vby_des, dt, b, self.max_vel * 0.7)
 
             # Compute v and ω
             v_des = Vbx_des * cos(θ) + Vby_des * sin(θ)
