@@ -147,20 +147,6 @@ def angular_difference(α, β):
     # This is either the distance or 360 - distance
     ang = fabs(β - α) % 360;       
     return 360 - ang if ang > 180 else ang
-
-def velocity_saturation2(θ, Vbx_des, Vby_des, dt, b=0.2, max_vel=[0.5,0.7]):
-    
-    # Compute θ_des
-    ω_des = 1/b * (Vby_des * cos(θ) - Vbx_des * sin(θ))
-    θ_des = θ + ω_des*dt
-    Δθ = angular_difference(θ_des, θ)
-    
-    # Compute Maximum Velocities
-    vx_max, vy_max = max_vel[0] * cos(Δθ) - max_vel[1] * b*sin(Δθ), max_vel[0] * sin(Δθ) + max_vel[1] * b*cos(Δθ)
-    scale_factor = max(fabs(Vbx_des/vx_max), fabs(Vby_des/vy_max))
-    
-    return np.multiply([Vbx_des,Vby_des], (1 / scale_factor))
-    
     
 def velocity_saturation(actual_state, desired_state, dt, b=0.2, max_vel=[0.5,0.7]):
     
