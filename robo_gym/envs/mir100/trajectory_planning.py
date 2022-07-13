@@ -44,12 +44,14 @@ from scipy.interpolate import InterpolatedUnivariateSpline
         ω = 1/b * (Vby * cos(θ) - Vbx * sin(θ))
 '''
 
-def plot_trajectory(x, y, i, seconds=3):
+def plot_trajectory(x, y, s, i, f, seconds=3):
             
     import matplotlib.pyplot as plt
     
     # Plot Trajectory
-    plt.plot(x(i), y(i))
+    plt.plot(x(s), y(s))
+    plt.xlim([min(x(i),y(i),x(f),y(f))-1, max(x(i),y(i),x(f),y(f))+1])
+    plt.ylim([min(x(i),y(i),x(f),y(f))-1, max(x(i),y(i),x(f),y(f))+1])
     plt.show(block=False)
     plt.pause(seconds)
     plt.close()
@@ -84,7 +86,7 @@ def plan_trajectory(parametrization = 's', method = '3rd polynomial', start=[0.0
             vx_s, vy_s = x_s.derivative(), y_s.derivative()
             
             # Plot Trajectory
-            plot_trajectory(x_s, y_s, s, 3)
+            plot_trajectory(x_s, y_s, s, i=0, f=1, seconds=3)
             
             return x_s, y_s, vx_s, vy_s
         
@@ -98,22 +100,41 @@ def plan_trajectory(parametrization = 's', method = '3rd polynomial', start=[0.0
             vx_t, vy_t = x_t.derivative(), y_t.derivative()
 
             # Plot Trajectory
-            plot_trajectory(x_t, y_t, t, 3)
+            plot_trajectory(x_t, y_t, t, i=0, f=tf, seconds=3)
             
             return x_t, y_t, vx_t, vy_t
 
-def pos_vel_from_spline(spline, i):
+def pos_vel_from_spline(spline, s, boundaries=[0,1]):
     
-    x, y   = spline[0](i), spline[1](i)
-    vx, vy = spline[2](i), spline[3](i)
+    if s >= boundaries[0] and s <= boundaries[1]:
+        
+        # Return x, y, vx, vy
+        return spline[0](s), spline[1](s), spline[2](s), spline[3](s)
     
-    return x, y, vx, vy
+    elif s < boundaries[0]:
+        
+        # Initial Position, 0 Velocities
+        return spline[0](boundaries[0]), spline[1](boundaries[0]), 0.0, 0.0
+    
+    elif s > boundaries[1]: 
+    
+        # Final Position, 0 Velocities
+        return spline[0](boundaries[1]), spline[1](boundaries[1]), 0.0, 0.0
 
-def compute_ds(dt, xi, yi, xf, yf, max_vel=[]):
+def compute_ds(dt, spline, max_vel):
     
-    trajectory_lenght = sqrt(pow(xf-xi,2) + pow(yf-yi,2))
-    execution_vel = max_vel[0]
-    distance_in_dt = execution_vel * dt
+    # Get Maximum Velocity Parameters
+    v_max, ω_max = max_vel
+    
+    # Get Splines
+    x, y, vx, vy = spline
+    trajectory_lenght = 0.0
+    L = 10000
+    
+    # Compute Trajectory Lenght
+    for s in range(1, L): trajectory_lenght += sqrt(pow(x(s/L)-x((s-1)/L),2) + pow(y(s/L)-y((s-1)/L),2))
+    
+    distance_in_dt = v_max * dt
     samples = trajectory_lenght / distance_in_dt
     ds = (1 / samples)
     
@@ -121,27 +142,30 @@ def compute_ds(dt, xi, yi, xf, yf, max_vel=[]):
     
     return ds
 
-def compute_maximum_velocity(θ, b, max_vel):
+def angular_difference(α, β):
     
-    v_max, ω_max = max_vel
+    # This is either the distance or 360 - distance
+    ang = fabs(β - α) % 360;       
+    return 360 - ang if ang > 180 else ang    
     
-    vx_max = v_max * cos(θ) - ω_max * b * sin(θ)
-    vy_max = v_max * sin(θ) - ω_max * b * cos(θ)
+def velocity_saturation(actual_state, desired_state, dt, b=0.2, max_vel=[0.5,0.7]):
     
-    return fabs(vx_max), fabs(vy_max)
+    x, y, θ, v, ω = actual_state
+    x_des, y_des, Vbx_des, Vby_des = desired_state
+    
+    # Assume Small ω Changes on Path (ω_des ~= ω) 
+    θ_des = θ + ω*dt
+    Δθ = angular_difference(θ_des, θ)
+    # print(f'θ: {θ} | θ_des: {θ_des} | Δθ: {Δθ}\nθ: {degrees(θ)} | θ_des: {degrees(θ_des)} | Δθ: {degrees(Δθ)}')
+    
+    vx_max, vy_max = max_vel[0] * cos(Δθ) - max_vel[1] * b*sin(Δθ), max_vel[0] * sin(Δθ) + max_vel[1] * b*cos(Δθ)
+    scale_factor = max(fabs(Vbx_des/vx_max), fabs(Vby_des/vy_max))
 
-def velocity_saturation(v, vmax):
-    
-    vx, vy = v
-    vx_max, vy_max = vmax
-    
-    scale_factor = max(fabs(vx/vx_max), fabs(vy/vy_max))
-    
-    return np.multiply([vx, vy], (1 / scale_factor))
+    return np.multiply([Vbx_des,Vby_des], (1 / scale_factor))
 
 def check_position_from_goal(actual_pose=[0.0,0.0,0.0], b_target_pose=[1.0,1.0,pi], distance_threshold=0.2):
-    
-    if (np.abs(np.array(actual_pose) - np.array(b_target_pose)) < np.array([distance_threshold, distance_threshold, distance_threshold/4])).all(): return True
+    # print(f'Distance From Target: {np.abs(np.array(actual_pose) - np.array(b_target_pose))}')
+    if (np.abs(np.array(actual_pose) - np.array(b_target_pose)) < np.array([distance_threshold, distance_threshold, distance_threshold])).all(): return True
     else: return False
 
 
