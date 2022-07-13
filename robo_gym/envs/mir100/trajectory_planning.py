@@ -6,7 +6,7 @@ from math import *
 # Import 1D Spline Library
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-''' Path Planning Equations | s € [0,1]
+''' Path Planning Equations | s € [0,1] - Differential Flatness
     
         xs = -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * (s-1) + βx * s * pow(s-1,2)
         ys = -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * (s-1) + βy * s * pow(s-1,2)
@@ -58,7 +58,6 @@ def plot_trajectory(x, y, s, i, f, seconds=3):
 
 def plan_trajectory(parametrization = 's', method = '3rd polynomial', start=[0.0,0.0,0.0], target=[1.0,1.0,pi], b=0.2, parameters=[]):
     
-    
     # Get Trajectory Parameters
     xi, yi, θi, xf, yf, θf = start + target
 
@@ -106,20 +105,14 @@ def plan_trajectory(parametrization = 's', method = '3rd polynomial', start=[0.0
 
 def pos_vel_from_spline(spline, s, boundaries=[0,1]):
     
-    if s >= boundaries[0] and s <= boundaries[1]:
-        
-        # Return x, y, vx, vy
-        return spline[0](s), spline[1](s), spline[2](s), spline[3](s)
+    # Return x, y, vx, vy
+    if s >= boundaries[0] and s <= boundaries[1]: return spline[0](s), spline[1](s), spline[2](s), spline[3](s)
     
-    elif s < boundaries[0]:
-        
-        # Initial Position, 0 Velocities
-        return spline[0](boundaries[0]), spline[1](boundaries[0]), 0.0, 0.0
+    # Initial Position, 0 Velocities
+    elif s < boundaries[0]: return spline[0](boundaries[0]), spline[1](boundaries[0]), 0.0, 0.0
     
-    elif s > boundaries[1]: 
-    
-        # Final Position, 0 Velocities
-        return spline[0](boundaries[1]), spline[1](boundaries[1]), 0.0, 0.0
+    # Final Position, 0 Velocities
+    elif s > boundaries[1]: return spline[0](boundaries[1]), spline[1](boundaries[1]), 0.0, 0.0
 
 def compute_ds(dt, spline, max_vel):
     
@@ -167,64 +160,3 @@ def check_position_from_goal(actual_pose=[0.0,0.0,0.0], b_target_pose=[1.0,1.0,p
     # print(f'Distance From Target: {np.abs(np.array(actual_pose) - np.array(b_target_pose))}')
     if (np.abs(np.array(actual_pose) - np.array(b_target_pose)) < np.array([distance_threshold, distance_threshold, distance_threshold])).all(): return True
     else: return False
-
-
-''' def s_cubic_polynomial_path(self, s_, xi, yi, xf, yf, αx, αy, βx, βy):
-
-        from scipy import misc
-
-        # Compute Cubic Polynomial Path | s € [0,1]
-        def x(s): return -pow(s-1,3) * xi + pow(s,3) * xf + αx * pow(s,2) * (s-1) + βx * s * pow(s-1,2)
-        def y(s): return -pow(s-1,3) * yi + pow(s,3) * yf + αy * pow(s,2) * (s-1) + βy * s * pow(s-1,2)
-
-        return x(s_), y(s_), misc.derivative(x,s_), misc.derivative(y,s_)
-
-    def t_cubic_polynomial_path(self, t_, tf, xi, yi, xf, yf, αx, αy, βx, βy):
-
-        from scipy import misc
-
-        # Compute Cubic Polynomial Path | t € [0,tf]
-        def x(t): return -pow((t-tf)/tf,3) * xi + pow(t/tf,3) * xf + αx * pow(t/tf,2) * ((t-tf)/tf) + βx * t/tf * pow((t-tf)/tf,2)
-        def y(t): return -pow((t-tf)/tf,3) * yi + pow(t/tf,3) * yf + αy * pow(t/tf,2) * ((t-tf)/tf) + βy * t/tf * pow((t-tf)/tf,2)
-
-        return x(t_), y(t_), misc.derivative(x,t_), misc.derivative(y,t_)
-'''        
-
-''' def s_plot_trajectory(self, xi, yi, xf, yf, αx, αy, βx, βy):
-    
-        import matplotlib.pyplot as plt
-
-        x, y = [], []
-        samples = 10000 #100000
-        for i in range(0, samples):
-            s = i/samples
-            x_, y_, vx, vy = self.s_cubic_polynomial_path(s, xi, yi, xf, yf, αx, αy, βx, βy)
-            x.append(x_)
-            y.append(y_)
-
-        plt.scatter(x,y)
-        plt.xlim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
-        plt.ylim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
-        plt.show(block=False) # plt.show()
-        plt.pause(3)
-        plt.close()
-
-    def t_plot_trajectory(self, tf, xi, yi, xf, yf, αx, αy, βx, βy):
-
-        import matplotlib.pyplot as plt
-
-        x, y = [], []
-        samples = 10000 #100000
-        for i in range(0, samples):
-            t = tf * i/samples
-            x_, y_, vx, vy = self.t_cubic_polynomial_path(t, tf, xi, yi, xf, yf, αx, αy, βx, βy)
-            x.append(x_)
-            y.append(y_)
-
-        plt.scatter(x,y)
-        plt.xlim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
-        plt.ylim([min(xi,yi,xf,yf)-1, max(xi,yi,xf,yf)+1])
-        plt.show(block=False) # plt.show()
-        plt.pause(3)
-        plt.close()
-'''        
