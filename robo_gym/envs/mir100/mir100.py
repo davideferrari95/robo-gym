@@ -733,7 +733,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         self.observation_space = self._get_observation_space()
         
         # 1 Parameters for Cubic Polynomial (K)
-        self.action_space = spaces.Box(low=np.full((1), 5), high=np.full((1), 1000), dtype=np.float32)
+        self.action_space = spaces.Box(low=np.full((1), 50), high=np.full((1), 1000), dtype=np.float32)
         
         self.seed()
                 
@@ -780,6 +780,10 @@ class TrajectoryNavigationMir100(Mir100Env):
         # Set target position
         if target_pose: assert len(target_pose)==3
         else: target_pose = self._get_target(start_pose)
+        
+        # DEBUG:
+        start_pose  = [0.0, 0.0, 1.0]
+        target_pose = [5.0, 8.0, 0.0]
         
         # Convert Pose To State
         rs_state[3:6] = self.start_pose = start_pose
@@ -842,7 +846,8 @@ class TrajectoryNavigationMir100(Mir100Env):
         
         # Initialize IO-SFL Parameters
         b, kp, kd = 0.5, 2.0, 0.0
-        s, dt = 0.0, 1/25
+        dt, t, tf = 1/25, 0.0, 40
+        s, s_dot  = 0.0, 1
 
         # Get Trajectory Parameters
         xi, yi, θi = starting_pose
@@ -853,27 +858,44 @@ class TrajectoryNavigationMir100(Mir100Env):
         b_target_pose   = [xf + b*cos(θf), yf + b*sin(θf), θf]
 
         # Get Path Planning Parameters| 1 Parameters for Cubic Polynomial (K)
-        K  = action[0]
+        # DEBUG: K  = action[0]
+        K = 50
         print(f'K = {K}')
 
         # Plan Trajectory
         import robo_gym.envs.mir100.trajectory_planning as tp
         trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=b_starting_pose, target=b_target_pose, parameters=[K])
+        
+        # Compute s(t) and it's derivates in t domain
+        s_t, ds_t = tp.compute_s_profile(trajectory, dt, s_dot, self.max_vel[0])
+        
+        # from robo_gym.envs.mir100.utils import polynomial_5_deg
+        # s_t, ds_t, dds_t, ddds_t  = polynomial_5_deg(tf)
 
         # Compute Samples
-        ds = tp.compute_ds(dt, trajectory, self.max_vel * 0.7)
+        # ds = tp.compute_ds(dt, trajectory, self.max_vel * 0.7)*0.1
 
         # Starting Time
         start_time = perf_counter()
 
         while 1:
 
+            # Different Thead for functions
+            # x = threading.Thread(target = sleeper, args = (5))
+            
             # Reset Sleep Timer
             timer = perf_counter()
-
+            
             # Get state from Robot Server
             x, y, θ, v, ω = self.client.get_state()[3:8]
 
+            # Increase s
+            # ds = tp.compute_ds([θ, v, ω], trajectory, s, b, self.max_vel)
+            # s += ds
+            
+            # Get s, ds from s(t), ds(t)
+            s, ds = s_t(t) if t <= tf else 1.0, ds_t(t) if t <= tf else 0.0
+            
             # Compute Actual Xb, Yb, Vbx, Vby
             xb, yb, vbx, vby = (x + b*cos(θ)), (y + b*sin(θ)), (v*cos(θ) - ω*b*sin(θ)), (v*sin(θ) + ω*b*cos(θ))
 
@@ -882,20 +904,22 @@ class TrajectoryNavigationMir100(Mir100Env):
 
             # Compute Position and Velocity from Trajectory
             x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline(trajectory, s, boundaries=[0,1])
-
+            vx_des, vy_des = np.multiply([vx_des, vy_des], ds)
+            
             # Compute Position and Velocity Errors
             ex, ey, edx, edy   = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
 
             # Compute Vbx, Vby
             Vbx_des, Vby_des = (vx_des + kp*ex + kd*edx), (vy_des + kp*ey + kd*edy)
-            # print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
+            print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
             
             # Compute v, ω + Velocity Saturation
-            Vbx_des, Vby_des = tp.velocity_saturation([x, y, θ, v, ω], [x_des, y_des, Vbx_des, Vby_des], dt, b, self.max_vel * 0.7)
+            # Vbx_des, Vby_des = tp.velocity_saturation([x, y, θ, v, ω], [x_des, y_des, Vbx_des, Vby_des], dt, b, self.max_vel * 0.7)
 
             # Compute v and ω
             v_des = Vbx_des * cos(θ) + Vby_des * sin(θ)
             ω_des = 1/b * (Vby_des * cos(θ) - Vbx_des * sin(θ))
+            print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
 
             # Check Velocity Limits
             if fabs(v_des) > self.max_vel[0] or fabs(ω_des) > self.max_vel[1]:
@@ -904,9 +928,9 @@ class TrajectoryNavigationMir100(Mir100Env):
             # Send action to Robot Server
             if not self.client.send_action([v_des,ω_des]):
                 raise RobotServerError("send_action")
-
-            # Increase s
-            s += ds
+            
+            # Increase t
+            t += dt
 
             # Out-Of-Time
             if (perf_counter() - start_time) > 60: 
