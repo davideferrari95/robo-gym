@@ -738,8 +738,8 @@ class TrajectoryNavigationMir100(Mir100Env):
         self.seed()
                 
         # Maximum linear (m/s) and angular (rad/s) velocities of MiR
-        max_lin_vel = 1   # 0.5
-        max_ang_vel = 0.8 # 0.7
+        max_lin_vel = 0.5
+        max_ang_vel = 0.7
         self.max_vel = np.array([max_lin_vel, max_ang_vel])
 
         # Connect to Robot Server
@@ -846,7 +846,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         
         # Initialize IO-SFL Parameters
         b, kp, kd = 0.5, 2.0, 0.0
-        dt, t, tf = 1/25, 0.0, 40
+        t, dt, tf = 0.0, 1/25, 40
         s, s_dot  = 0.0, 1
 
         # Get Trajectory Parameters
@@ -866,8 +866,8 @@ class TrajectoryNavigationMir100(Mir100Env):
         import robo_gym.envs.mir100.trajectory_planning as tp
         trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=b_starting_pose, target=b_target_pose, parameters=[K])
         
-        # Compute s(t) and it's derivates in t domain
-        s_t, ds_t = tp.compute_s_profile(trajectory, dt, s_dot, self.max_vel[0])
+        # Compute X(t), Y(t), Vx(t), Vy(t) and tf
+        x_t, y_t, vx_t, vy_t, tf = tp.trajectory_in_t(trajectory, dt, s_dot, self.max_vel[0])
         
         # from robo_gym.envs.mir100.utils import polynomial_5_deg
         # s_t, ds_t, dds_t, ddds_t  = polynomial_5_deg(tf)
@@ -894,7 +894,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             # s += ds
             
             # Get s, ds from s(t), ds(t)
-            s, ds = s_t(t) if t <= tf else 1.0, ds_t(t) if t <= tf else 0.0
+            # s, ds = s_t(t) if t <= tf else 1.0, ds_t(t) if t <= tf else 0.0
             
             # Compute Actual Xb, Yb, Vbx, Vby
             xb, yb, vbx, vby = (x + b*cos(θ)), (y + b*sin(θ)), (v*cos(θ) - ω*b*sin(θ)), (v*sin(θ) + ω*b*cos(θ))
@@ -903,11 +903,16 @@ class TrajectoryNavigationMir100(Mir100Env):
             if tp.check_position_from_goal([xb,yb,θ], b_target_pose, distance_threshold=0.1): break
 
             # Compute Position and Velocity from Trajectory
-            x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline(trajectory, s, boundaries=[0,1])
-            vx_des, vy_des = np.multiply([vx_des, vy_des], ds)
+            # x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline(trajectory, s, boundaries=[0,1])
+            # vx_des, vy_des = np.multiply([vx_des, vy_des], ds)
+            
+            # Get Position and Velocity from Trajectory in Time
+            if t > 0 and t < tf: x_des, y_des, vx_des, vy_des = x_t(t), y_t(t), vx_t(t), vy_t(t)
+            elif t < 0: x_des, y_des, vx_des, vy_des = xi, yi, 0.0, 0.0
+            elif t > tf: x_des, y_des, vx_des, vy_des = xf, yf, 0.0, 0.0
             
             # Compute Position and Velocity Errors
-            ex, ey, edx, edy   = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
+            ex, ey, edx, edy = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
 
             # Compute Vbx, Vby
             Vbx_des, Vby_des = (vx_des + kp*ex + kd*edx), (vy_des + kp*ey + kd*edy)

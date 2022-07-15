@@ -140,7 +140,89 @@ def check_position_from_goal(actual_pose=[0.0,0.0,0.0], b_target_pose=[1.0,1.0,p
     # print(f'Distance From Target: {np.abs(np.array(actual_pose) - np.array(b_target_pose))}')
     if (np.abs(np.array(actual_pose) - np.array(b_target_pose)) < np.array([distance_threshold, distance_threshold, distance_threshold])).all(): return True
     else: return False
+
+def trajectory_in_t(path_in_s, dt, s_dot=1, v_max=1):
     
+    import matplotlib.pyplot as plt
+    xs, ys, xs_dot, ys_dot = path_in_s
+    vx_max, vy_max = v_max, v_max
+    s=np.linspace(0, 1, 10001)
+    
+    # Plot Trajectory in S
+    plt.plot(xs(s), ys(s))
+    plt.title('Original Path in S - X(s), Y(s)')
+    plt.show()
+    
+    # Plot Velocity in S
+    plt.plot(s, xs_dot(s), s, ys_dot(s))
+    plt.title('Speed in S: X_dot(s), Y_dot(s)')
+    plt.show()
+
+    s_n, t, S, T = 0.0, 0.0, [], []
+    DS, DX, DY = [], [], []
+    
+    while s_n < 1:
+        
+        # Append s, t
+        S.append(s_n)
+        T.append(t)
+        
+        # Compute Actual x_dot, y_dot
+        dX, dY = xs_dot(s_n), ys_dot(s_n)
+        
+        # Compute s_dot Admissible
+        s_dot_x = vx_max/abs(dX) if abs(dX) > vx_max else s_dot
+        s_dot_y = vy_max/abs(dY) if abs(dY) > vy_max else s_dot
+        s_dot = min(s_dot_x, s_dot_y, s_dot)
+        
+        # Save S_dot, X_dot, Y_dot
+        DS.append(s_dot)
+        DX.append(dX)
+        DY.append(dY)
+
+        # Increase s, t
+        s_n = s_n + s_dot*dt
+        t = t + dt
+        
+    # Plot S in Time
+    plt.plot(T, S)
+    plt.title('S in Time')
+    plt.show()
+
+    # Plot S_dot in Time
+    plt.plot(T, DS)
+    plt.title('S_dot in Time')
+    plt.show()
+    
+    # Plot Vx, Vy in Time
+    plt.plot(T,np.multiply(DS,DX), T,np.multiply(DS,DY))
+    plt.title('Vx, Vy in Time')
+    plt.show()
+    
+    # Plot Trajectory in Time
+    plt.plot(T,xs(S), T,ys(S))
+    plt.title("Trajectory in Time")
+    
+    # Plot Trajectory with new S
+    plt.plot(xs(S), ys(S))
+    plt.title('New Path in S - X(S), Y(S)')
+    plt.show()
+    
+    # Original Trajectory in S
+    plt.plot(s,xs(S), s,ys(s))
+    plt.title("Original Trajectory in S")
+    
+    # Computed Trajectory in S
+    plt.plot(S,xs(S), S,ys(S))
+    plt.title("Computed Trajectory in S")
+
+    # Computed Path
+    plt.plot(xs(S), ys(S))
+    plt.title("Computed Path")
+    
+    # Return Vx, Vy splines and Final Time (t-dt)
+    return IUS(T,xs(S)), IUS(T,ys(S)), IUS(T,np.multiply(DS,DX)), IUS(T,np.multiply(DS,DY)), t-dt
+
 # def compute_ds(state, spline, s, b, max_vel):
     
 #     θ, v, ω = state
