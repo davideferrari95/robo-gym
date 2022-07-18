@@ -925,11 +925,10 @@ class TrajectoryNavigationMir100(Mir100Env):
             # print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
 
             # Check Velocity Limits
-            if fabs(v_des) > self.max_vel[0] or fabs(ω_des) > self.max_vel[1]:
-                print(f'Velocity Limit Exceeded | v = {v_des:.5f} | ω = {ω_des:.5f}')
+            v, ω = tp.check_velocity_limits([v_des, ω_des], self.max_vel)
 
             # Send action to Robot Server
-            if not self.client.send_action([v_des,ω_des]):
+            if not self.client.send_action([v,ω]):
                 raise RobotServerError("send_action")
             
             # Increase t

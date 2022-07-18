@@ -109,7 +109,7 @@ def plan_trajectory(parametrization = 's', method = '3rd polynomial', start=[0.0
             
             return x_t, y_t, vx_t, vy_t
 
-def pos_vel_from_spline(spline, s, boundaries=[0,1]):
+def pos_vel_from_spline(spline=[], s=0.0, boundaries=[0,1]):
     
     # Return x, y, vx, vy
     if s >= boundaries[0] and s <= boundaries[1]: return spline[0](s), spline[1](s), spline[2](s), spline[3](s)
@@ -119,21 +119,6 @@ def pos_vel_from_spline(spline, s, boundaries=[0,1]):
     
     # Final Position, 0 Velocities
     elif s > boundaries[1]: return spline[0](boundaries[1]), spline[1](boundaries[1]), 0.0, 0.0
-    
-def velocity_saturation(actual_state, desired_state, dt, b=0.2, max_vel=[0.5,0.7]):
-    
-    x, y, θ, v, ω = actual_state
-    x_des, y_des, Vbx_des, Vby_des = desired_state
-    
-    # Assume Small ω Changes on Path (ω_des ~= ω) 
-    θ_des = θ + ω*dt
-    Δθ = angular_difference_radians(θ_des, θ)
-    # print(f'θ: {θ} | θ_des: {θ_des} | Δθ: {Δθ}\nθ: {degrees(θ)} | θ_des: {degrees(θ_des)} | Δθ: {degrees(Δθ)}')
-    
-    vx_max, vy_max = max_vel[0] * cos(Δθ) - max_vel[1] * b*sin(Δθ), max_vel[0] * sin(Δθ) + max_vel[1] * b*cos(Δθ)
-    scale_factor = max(fabs(Vbx_des/vx_max), fabs(Vby_des/vy_max))
-
-    return np.multiply([Vbx_des,Vby_des], (1 / scale_factor))
 
 def check_position_from_goal(actual_pose=[0.0,0.0,0.0], b_target_pose=[1.0,1.0,pi], distance_threshold=0.2):
     
@@ -247,8 +232,6 @@ def trajectory_in_t(path_in_s, b, θi, dt, ds=1, vel_max=[0.5,0.7]):
         # Compute s_dot Admissible
         s_dot_x = vx_max/abs(dX) if abs(dX*s_dot) > vx_max else s_dot
         s_dot_y = vy_max/abs(dY) if abs(dY*s_dot) > vy_max else s_dot
-        # print(f's_dot_x: {s_dot_x}\ns_dot_y: {s_dot_y}')
-        # print(f'dX*s_dot: {dX*s_dot}\ndY*s_dot: {dY*s_dot}\n')
         s_dot = min(s_dot_x, s_dot_y, s_dot)
         
         # Save S_dot, X_dot, Y_dot
@@ -272,31 +255,41 @@ def trajectory_in_t(path_in_s, b, θi, dt, ds=1, vel_max=[0.5,0.7]):
     # Return Vx, Vy splines and Final Time (t-dt)
     return IUS(T,xs(S)), IUS(T,ys(S)), IUS(T,np.multiply(DS,DX)), IUS(T,np.multiply(DS,DY)), t-dt
 
-# def compute_ds(state, spline, s, b, max_vel):
+def check_velocity_limits(actual_velocities=[], max_vel=[0.5,0.7]):
     
-#     θ, v, ω = state
-#     v_max, ω_max = max_vel
-#     x, y, vx, vy = spline
-    
-#     return min((v_max*cos(θ)-b*ω_max*sin(θ))/vx(s), (v_max*sin(θ)+b*ω_max*cos(θ))/vy(s))
+    v, ω = actual_velocities
+    v_max, ω_max = max_vel
 
-# def compute_ds(dt, spline, max_vel):
+    # Both Velocity Saturation    
+    if fabs(v) > v_max and fabs(ω) > ω_max:
+        print(f'Velocity Limits Exceeded | v = {v:.5f} | ω = {ω:.5f}')
+        v, ω = np.sign(v) * v_max, np.sign(ω) * ω_max
+
+    # Linear Velocity Saturation    
+    elif fabs(v) > v_max:
+        print(f'Linear Velocity Limit Exceeded | v = {v:.5f} | ω = {ω:.5f}')
+        v = np.sign(v) * v_max
+
+    # Angular Velocity Saturation    
+    elif fabs(ω) > ω_max:
+        print(f'Angular Velocity Limit Exceeded | v = {v:.5f} | ω = {ω:.5f}')
+        ω = np.sign(ω) * ω_max
+
+    return v, ω
     
-#     # Get Maximum Velocity Parameters
-#     v_max, ω_max = max_vel
+''' 
+def velocity_saturation(actual_state, desired_state, dt, b=0.2, max_vel=[0.5,0.7]):
     
-#     # Get Splines
-#     x, y, vx, vy = spline
-#     trajectory_lenght = 0.0
-#     L = 10000
+    x, y, θ, v, ω = actual_state
+    x_des, y_des, Vbx_des, Vby_des = desired_state
     
-#     # Compute Trajectory Lenght
-#     for s in range(1, L): trajectory_lenght += sqrt(pow(x(s/L)-x((s-1)/L),2) + pow(y(s/L)-y((s-1)/L),2))
+    # Assume Small ω Changes on Path (ω_des ~= ω) 
+    θ_des = θ + ω*dt
+    Δθ = angular_difference_radians(θ_des, θ)
+    # print(f'θ: {θ} | θ_des: {θ_des} | Δθ: {Δθ}\nθ: {degrees(θ)} | θ_des: {degrees(θ_des)} | Δθ: {degrees(Δθ)}')
     
-#     distance_in_dt = v_max * dt
-#     samples = trajectory_lenght / distance_in_dt
-#     ds = (1 / samples)
-    
-#     print(f'Trajectory Lenght: {trajectory_lenght:.4f} | ds: {ds:.4f}')
-    
-#     return ds
+    vx_max, vy_max = max_vel[0] * cos(Δθ) - max_vel[1] * b*sin(Δθ), max_vel[0] * sin(Δθ) + max_vel[1] * b*cos(Δθ)
+    scale_factor = max(fabs(Vbx_des/vx_max), fabs(Vby_des/vy_max))
+
+    return np.multiply([Vbx_des,Vby_des], (1 / scale_factor)) 
+'''
