@@ -738,7 +738,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         self.seed()
                 
         # Maximum linear (m/s) and angular (rad/s) velocities of MiR
-        max_lin_vel = 1.0
+        max_lin_vel = 0.5
         max_ang_vel = 0.7
         self.max_vel = np.array([max_lin_vel, max_ang_vel])
 
