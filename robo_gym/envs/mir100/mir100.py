@@ -903,9 +903,11 @@ class TrajectoryNavigationMir100(Mir100Env):
             # vx_des, vy_des = np.multiply([vx_des, vy_des], ds)
             
             # Get Position and Velocity from Trajectory in Time
-            if t >= 0 and t <= tf: x_des, y_des, vx_des, vy_des = x_t(t), y_t(t), vx_t(t), vy_t(t)
-            elif t < 0: x_des, y_des, vx_des, vy_des = xi, yi, 0.0, 0.0
-            elif t > tf: x_des, y_des, vx_des, vy_des = xf, yf, 0.0, 0.0
+            x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline([x_t, y_t, vx_t, vy_t], t, boundaries=[0,tf])
+            
+            # if t >= 0 and t <= tf: x_des, y_des, vx_des, vy_des = x_t(t), y_t(t), vx_t(t), vy_t(t)
+            # elif t < 0: x_des, y_des, vx_des, vy_des = xi, yi, 0.0, 0.0
+            # elif t > tf: x_des, y_des, vx_des, vy_des = xf, yf, 0.0, 0.0
             
             # Compute Position and Velocity Errors
             ex, ey, edx, edy = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
