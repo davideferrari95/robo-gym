@@ -738,7 +738,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         self.seed()
                 
         # Maximum linear (m/s) and angular (rad/s) velocities of MiR
-        max_lin_vel = 0.5
+        max_lin_vel = 1.0
         max_ang_vel = 0.7
         self.max_vel = np.array([max_lin_vel, max_ang_vel])
 
@@ -780,10 +780,6 @@ class TrajectoryNavigationMir100(Mir100Env):
         # Set target position
         if target_pose: assert len(target_pose)==3
         else: target_pose = self._get_target(start_pose)
-        
-        # DEBUG:
-        start_pose  = [0.0, 0.0, 1.0]
-        target_pose = [5.0, 8.0, 0.0]
         
         # Convert Pose To State
         rs_state[3:6] = self.start_pose = start_pose
@@ -858,16 +854,16 @@ class TrajectoryNavigationMir100(Mir100Env):
         b_target_pose   = [xf + b*cos(θf), yf + b*sin(θf), θf]
 
         # Get Path Planning Parameters| 1 Parameters for Cubic Polynomial (K)
-        # DEBUG: K  = action[0]
-        K = 50
+        K  = action[0]
         print(f'K = {K}')
 
         # Plan Trajectory
         import robo_gym.envs.mir100.trajectory_planning as tp
         trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=b_starting_pose, target=b_target_pose, parameters=[K])
+        # WARNING: devo pianificare la traiettoria del punto B o del robot ?
         
         # Compute X(t), Y(t), Vx(t), Vy(t) and tf
-        x_t, y_t, vx_t, vy_t, tf = tp.trajectory_in_t(trajectory, dt, s_dot, self.max_vel[0])
+        x_t, y_t, vx_t, vy_t, tf = tp.trajectory_in_t(trajectory, b, θi, dt, s_dot, self.max_vel)
         
         # from robo_gym.envs.mir100.utils import polynomial_5_deg
         # s_t, ds_t, dds_t, ddds_t  = polynomial_5_deg(tf)
@@ -907,7 +903,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             # vx_des, vy_des = np.multiply([vx_des, vy_des], ds)
             
             # Get Position and Velocity from Trajectory in Time
-            if t > 0 and t < tf: x_des, y_des, vx_des, vy_des = x_t(t), y_t(t), vx_t(t), vy_t(t)
+            if t >= 0 and t <= tf: x_des, y_des, vx_des, vy_des = x_t(t), y_t(t), vx_t(t), vy_t(t)
             elif t < 0: x_des, y_des, vx_des, vy_des = xi, yi, 0.0, 0.0
             elif t > tf: x_des, y_des, vx_des, vy_des = xf, yf, 0.0, 0.0
             
@@ -916,7 +912,7 @@ class TrajectoryNavigationMir100(Mir100Env):
 
             # Compute Vbx, Vby
             Vbx_des, Vby_des = (vx_des + kp*ex + kd*edx), (vy_des + kp*ey + kd*edy)
-            print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
+            # print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
             
             # Compute v, ω + Velocity Saturation
             # Vbx_des, Vby_des = tp.velocity_saturation([x, y, θ, v, ω], [x_des, y_des, Vbx_des, Vby_des], dt, b, self.max_vel * 0.7)
@@ -924,7 +920,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             # Compute v and ω
             v_des = Vbx_des * cos(θ) + Vby_des * sin(θ)
             ω_des = 1/b * (Vby_des * cos(θ) - Vbx_des * sin(θ))
-            print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
+            # print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
 
             # Check Velocity Limits
             if fabs(v_des) > self.max_vel[0] or fabs(ω_des) > self.max_vel[1]:
@@ -938,7 +934,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             t += dt
 
             # Out-Of-Time
-            if (perf_counter() - start_time) > 60: 
+            if (perf_counter() - start_time) > 2*tf: 
                 print('Time limit Exceeded')
                 return 0
 
@@ -947,6 +943,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             sleep(max(0, dt - (perf_counter() - timer)))
 
         # Return Trajectory Time
+        print(f'Final Time: {tf} | Execution Time: {perf_counter() - start_time}')
         return (perf_counter() - start_time)
 
     def step(self, action):
