@@ -2,7 +2,6 @@
 
 import numpy as np
 from math import *
-from robo_gym.envs.mir100.utils import angular_difference_radians
 
 # Import 1D Spline Library
 from scipy.interpolate import InterpolatedUnivariateSpline as IUS
@@ -203,15 +202,13 @@ def plot_trajectory_graphs(xs, ys, xs_dot, ys_dot, s, T, S, DS, DX, DY):
 def trajectory_in_t(path_in_s, b, θi, dt, ds=1, vel_max=[0.5,0.7]):
 
     xs, ys, xs_dot, ys_dot = path_in_s
+    θ = θi
     
-    # TODO: Compute vx_max, vy_max using v_max, ω_max
-    vx_max, vy_max = np.multiply(vel_max, 0.5)
-    # θ = θi
-    # v_max, ω_max = vel_max
+    # Get Linear and Angular Velocity Limits
+    v_max, ω_max = vel_max
     
-    s=np.linspace(0, 1, 10001)
-    s_n, t, S, T = 0.0, 0.0, [], []
-    DS, DX, DY = [], [], []
+    s_n, t = 0.0, 0.0
+    S, T, DS, DX, DY = [], [], [], [], []
     
     while s_n < 1:
         
@@ -225,9 +222,9 @@ def trajectory_in_t(path_in_s, b, θi, dt, ds=1, vel_max=[0.5,0.7]):
         # Compute Actual x_dot, y_dot
         dX, dY = xs_dot(s_n), ys_dot(s_n)
         
-        # TODO: Compute Maximum Velocity
-        # vx_max = fabs(v_max * cos(θ) - b * ω_max * sin(θ))
-        # vy_max = fabs(v_max * sin(θ) + b * ω_max * cos(θ))
+        # Compute Maximum Velocity
+        vx_max = fabs(v_max * cos(θ) - b * ω_max * sin(θ))
+        vy_max = fabs(v_max * sin(θ) + b * ω_max * cos(θ))
         
         # Compute s_dot Admissible
         s_dot_x = vx_max/abs(dX) if abs(dX*s_dot) > vx_max else s_dot
@@ -236,14 +233,12 @@ def trajectory_in_t(path_in_s, b, θi, dt, ds=1, vel_max=[0.5,0.7]):
         
         # Save S_dot, X_dot, Y_dot
         DS.append(s_dot)
-        
-        # WARNING: non devo calcolare i nuovi dX e dY dato che ho ridotto s_dot ?
         DX.append(dX)
         DY.append(dY)
 
-        # TODO: Compute new θ
-        # ω = 1/b * (dY * s_dot * cos(θ) - dX + s_dot * sin(θ))
-        # θ = ω * dt
+        # Compute New θ
+        ω = 1/b * ((dY * s_dot) * cos(θ) - (dX * s_dot) * sin(θ))
+        θ = ω * dt
         
         # Increase s, t
         s_n = s_n + s_dot*dt
@@ -276,20 +271,3 @@ def check_velocity_limits(actual_velocities=[], max_vel=[0.5,0.7]):
         ω = np.sign(ω) * ω_max
 
     return v, ω
-    
-''' 
-def velocity_saturation(actual_state, desired_state, dt, b=0.2, max_vel=[0.5,0.7]):
-    
-    x, y, θ, v, ω = actual_state
-    x_des, y_des, Vbx_des, Vby_des = desired_state
-    
-    # Assume Small ω Changes on Path (ω_des ~= ω) 
-    θ_des = θ + ω*dt
-    Δθ = angular_difference_radians(θ_des, θ)
-    # print(f'θ: {θ} | θ_des: {θ_des} | Δθ: {Δθ}\nθ: {degrees(θ)} | θ_des: {degrees(θ_des)} | Δθ: {degrees(Δθ)}')
-    
-    vx_max, vy_max = max_vel[0] * cos(Δθ) - max_vel[1] * b*sin(Δθ), max_vel[0] * sin(Δθ) + max_vel[1] * b*cos(Δθ)
-    scale_factor = max(fabs(Vbx_des/vx_max), fabs(Vby_des/vy_max))
-
-    return np.multiply([Vbx_des,Vby_des], (1 / scale_factor)) 
-'''
