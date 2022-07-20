@@ -721,36 +721,37 @@ class ObstacleAvoidanceMir100Rob(ObstacleAvoidanceMir100):
 
 
 class TrajectoryNavigationMir100(Mir100Env):
-
+    
     laser_len = 0
 
     def __init__(self, rs_address=None, **kwargs):
-
+    
         self.mir100 = mir100_utils.Mir100()
-
+        
         self.elapsed_steps = 0
         self.min_target_dist = 1.0
         self.observation_space = self._get_observation_space()
-
+        
         # 1 Parameters for Cubic Polynomial (K)
-        self.action_space = spaces.Box(low=np.full((1), 0.1), high=np.full((1), 5), dtype=np.float32)
-
+        self.action_space = spaces.Box(low=np.full((1), 50), high=np.full((1), 1000), dtype=np.float32)
+        
         self.seed()
-
+                
         # Maximum linear (m/s) and angular (rad/s) velocities of MiR
         max_lin_vel = 0.5
         max_ang_vel = 0.7
         self.max_vel = np.array([max_lin_vel, max_ang_vel])
 
         # Connect to Robot Server
-        if rs_address: self.client = rs_client.Client(rs_address)
+        if rs_address:
+            self.client = rs_client.Client(rs_address)
         else:
             print("WARNING: No IP and Port passed. Simulation will not be started")
             print("WARNING: Use this only to get environment shape")
 
     def reset(self, start_pose = None, target_pose = None):
         
-        """ Environment reset
+        """ Environment reset.
 
         Args:
             
@@ -762,7 +763,7 @@ class TrajectoryNavigationMir100(Mir100Env):
             np.array: Environment state.
 
         """
-
+        
         self.elapsed_steps = 0
 
         self.prev_base_reward = None
@@ -773,13 +774,15 @@ class TrajectoryNavigationMir100(Mir100Env):
         rs_state = np.zeros(self._get_robot_server_state_len())
 
         # Set Robot starting position
-        if start_pose: assert len(start_pose) == 3
+        if start_pose: assert len(start_pose)==3
         else: start_pose = self._get_start_pose()
 
         # Set target position
-        if target_pose: assert len(target_pose) == 3
+        if target_pose: assert len(target_pose)==3
         else: target_pose = self._get_target(start_pose)
-
+        
+        # TODO: Plan Trajectory (K Hard-Coded)
+        
         # Convert Pose To State
         rs_state[3:6] = self.start_pose = start_pose
         rs_state[0:3] = self.target_pose = target_pose
@@ -788,7 +791,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         print(f'Target Pose   | X = {target_pose[0]:.3f} | Y = {target_pose[1]:.3f} | θ = {degrees(target_pose[2]):.3f}')
 
         # Set initial state of the Robot Server
-        state_msg = robot_server_pb2.State(state=rs_state.tolist())
+        state_msg = robot_server_pb2.State(state = rs_state.tolist())
         if not self.client.set_state_msg(state_msg):
             raise RobotServerError("set_state")
 
@@ -796,7 +799,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         rs_state = copy.deepcopy(np.nan_to_num(np.array(self.client.get_state_msg().state)))
 
         # Check if the length of the Robot Server state received is correct
-        if not len(rs_state) == self._get_robot_server_state_len():
+        if not len(rs_state)== self._get_robot_server_state_len():
             raise InvalidStateError("Robot Server state received has wrong length")
 
         # Convert the initial state from Robot Server format to environment format
@@ -806,24 +809,18 @@ class TrajectoryNavigationMir100(Mir100Env):
         if not self.observation_space.contains(self.state):
             raise InvalidStateError()
 
-        # TODO: Plan Trajectory (K Hard-Coded)
-        self.trajectory, self.tf = self.plan_trajectory(start_pose, target_pose)
-
-        # Starting Episode Timer
-        self.episode_start_time = perf_counter()
-
         return self.state
-    
+
     def _reward(self, rs_state, trajectory_time, action):
-
-        # Variable Initialization
+        
+        # Variable Initialization        
         reward, done, info = 0, False, {}
-
+        
         # Out-Of-Time
         if trajectory_time == 0:
             reward = -100
             done = True
-
+        
         # Base Reward - Positive Reward if New Execution Time is Lower
         base_reward = 50 * (self.prev_time - trajectory_time)
         print(f'Trajectory Time: {trajectory_time}')
@@ -836,15 +833,101 @@ class TrajectoryNavigationMir100(Mir100Env):
         if self.prev_base_reward is not None:
             reward = base_reward - self.prev_base_reward
         self.prev_base_reward = base_reward
-
+        
         # Default Done with IO-SFL
         done = True
         # done = False
-
+        
         return reward, done, info
+    
+    def io_sfl(self, starting_pose, target_pose, action):
+        
+        # Initialize IO-SFL Parameters
+        b, kp, kd = 0.5, 2.0, 0.0
+        t, dt = 0.0, 1/50
+
+        # Get Trajectory Parameters
+        xi, yi, θi = starting_pose
+        xf, yf, θf = target_pose
+        
+        # Compute b Start and Target Pose        
+        b_starting_pose = [xi + b*cos(θi), yi + b*sin(θi), θi]
+        b_target_pose   = [xf + b*cos(θf), yf + b*sin(θf), θf]
+
+        # Get Path Planning Parameters| 1 Parameters for Cubic Polynomial (K)
+        K  = action[0]
+        print(f'K = {K}')
+
+        # Plan Trajectory
+        import robo_gym.envs.mir100.trajectory_planning as tp
+        trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=b_starting_pose, target=b_target_pose, parameters=[K])
+        # trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=starting_pose, target=target_pose, parameters=[K])
+        
+        # Compute X(t), Y(t), Vx(t), Vy(t) and tf with Maximum s_dot = 1.0
+        x_t, y_t, vx_t, vy_t, tf = tp.trajectory_in_t(trajectory, b, θi, dt, ds=1.0, vel_max=self.max_vel)
+        
+        # Starting Timers
+        start_time = perf_counter()
+        action_timer = perf_counter()
+
+        while 1:
+
+            # Different Thead for functions
+            # x = threading.Thread(target = sleeper, args = (5))
+
+            # Get state from Robot Server
+            x, y, θ, v, ω = self.client.get_state()[3:8]
+            
+            # Compute Actual Xb, Yb, Vbx, Vby
+            xb, yb, vbx, vby = (x + b*cos(θ)), (y + b*sin(θ)), (v*cos(θ) - ω*b*sin(θ)), (v*sin(θ) + ω*b*cos(θ))
+            
+            # Check Position
+            if tp.check_position_from_goal([xb,yb,θ], b_target_pose, distance_threshold=0.1): break
+            # if tp.check_position_from_goal([xb,yb,θ], target_pose, distance_threshold=0.1): break
+            
+            # Get Position and Velocity from Trajectory in Time
+            x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline([x_t, y_t, vx_t, vy_t], t, boundaries=[0,tf])
+            
+            # Compute Position and Velocity Errors
+            ex, ey, edx, edy = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
+
+            # Compute Vbx, Vby
+            Vbx_des, Vby_des = (vx_des + kp*ex + kd*edx), (vy_des + kp*ey + kd*edy)
+            # print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
+            
+            # Compute v and ω
+            v_des = Vbx_des * cos(θ) + Vby_des * sin(θ)
+            ω_des = 1/b * (Vby_des * cos(θ) - Vbx_des * sin(θ))
+            # print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
+
+            # Check Velocity Limits | Cut-Off Tolerance = 0.1
+            v, ω = tp.check_velocity_limits([v_des, ω_des], np.add(self.max_vel, 0.1))
+
+            # Wait Time
+            if (dt - (perf_counter() - action_timer)) < 0: print('Computation Time Exceeded Cycle Time')
+            sleep(max(0, dt - (perf_counter() - action_timer)))
+            
+            # Send action to Robot Server
+            if not self.client.send_action([v,ω]):
+                raise RobotServerError("send_action")
+            
+            # Start New Action Timer
+            action_timer = perf_counter()
+            
+            # Increase t
+            t += dt
+
+            # Out-Of-Time
+            if (perf_counter() - start_time) > 2*tf: 
+                print('Time limit Exceeded')
+                return 0
+
+        # Return Trajectory Time
+        print(f'Final Time: {tf} | Execution Time: {perf_counter() - start_time}')
+        return (perf_counter() - start_time)
 
     def step(self, action):
-
+        
         # Convert From TensorFlow to Numpy
         if type(action).__name__ == 'ndarray': action = action.astype(np.float32)
         elif type(action).__name__ == 'EagerTensor': action = action.numpy()
@@ -857,7 +940,7 @@ class TrajectoryNavigationMir100(Mir100Env):
         assert self.action_space.contains(action), "%r (%s) invalid" % (action, type(action))
 
         # IO-SFL - Execute Trajectory
-        self.io_sfl(self.start_pose, self.target_pose, action)
+        trajectory_time = self.io_sfl(self.start_pose, self.target_pose, action)
 
         # Get state from Robot Server
         rs_state = self.client.get_state_msg().state
@@ -873,93 +956,6 @@ class TrajectoryNavigationMir100(Mir100Env):
         reward, done, info = self._reward(rs_state=rs_state, trajectory_time=trajectory_time, action=action)
 
         return self.state, reward, done, info
-
-    def plan_trajectory(self, starting_pose, target_pose):
-
-        # Initialize Path Planning Parameters
-        K, self.dt = 10, 1/50
-        self.kp, self.kd = 2.0, 0.0
-
-        # Get Trajectory Parameters
-        xi, yi, θi = starting_pose
-        xf, yf, θf = target_pose
-
-        # Plan Trajectory
-        import robo_gym.envs.mir100.trajectory_planning as tp
-        trajectory = tp.plan_trajectory(parametrization='s', method='3rd polynomial', start=starting_pose, target=target_pose, parameters=[K])
-
-        # Compute X(t), Y(t), Vx(t), Vy(t) and tf with Maximum s_dot = 1.0
-        x_t, y_t, vx_t, vy_t, tf = tp.trajectory_in_t(trajectory, b, θi, self.dt, ds=1.0, vel_max=self.max_vel)
-
-        # Return Splines and Execution Time
-        return x_t, y_t, vx_t, vy_t, tf
-
-    def io_sfl(self, action):
-
-        # Initialize Time Step
-        t, dt = 0.0, self.dt
-
-        # Get IO-SFL Parameter
-        b = action[0]
-        print(f'b = {b}')
-
-        action_timer = perf_counter()
-
-        while 1:
-
-            # Different Thead for functions
-            # x = threading.Thread(target = sleeper, args = (5))
-
-            # Get state from Robot Server
-            x, y, θ, v, ω = self.client.get_state()[3:8]
-
-            # Compute Actual Xb, Yb, Vbx, Vby
-            xb, yb, vbx, vby = (x + b*cos(θ)), (y + b*sin(θ)), (v*cos(θ) - ω*b*sin(θ)), (v*sin(θ) + ω*b*cos(θ))
-
-            # Check Position
-            if tp.check_position_from_goal([xb, yb, θ], b_target_pose, distance_threshold=0.1): break
-            # if tp.check_position_from_goal([xb,yb,θ], target_pose, distance_threshold=0.1): break
-
-            # Get Position and Velocity from Trajectory in Time
-            x_des, y_des, vx_des, vy_des = tp.pos_vel_from_spline([x_t, y_t, vx_t, vy_t], t, boundaries=[0, tf])
-
-            # Compute Position and Velocity Errors
-            ex, ey, edx, edy = (x_des - xb), (y_des - yb), (vx_des - vbx), (vy_des - vby)
-
-            # Compute Vbx, Vby
-            Vbx_des, Vby_des = (vx_des + kp*ex + kd*edx), (vy_des + kp*ey + kd*edy)
-            # print(f'Vx_des: {Vbx_des}, Vy_des: {Vby_des}')
-
-            # Compute v and ω
-            v_des = Vbx_des * cos(θ) + Vby_des * sin(θ)
-            ω_des = 1/b * (Vby_des * cos(θ) - Vbx_des * sin(θ))
-            # print(f'v = {v_des:.5f} | ω = {ω_des:.5f}')
-
-            # Check Velocity Limits | Cut-Off Tolerance = 0.1
-            v, ω = tp.check_velocity_limits([v_des, ω_des], np.add(self.max_vel, 0.1))
-
-            # Wait Time
-            if (dt - (perf_counter() - action_timer)) < 0: print('Computation Time Exceeded Cycle Time')
-            sleep(max(0, dt - (perf_counter() - action_timer)))
-
-            # Send action to Robot Server
-            if not self.client.send_action([v, ω]):
-                raise RobotServerError("send_action")
-
-            # Start New Action Timer
-            action_timer = perf_counter()
-
-            # Increase t
-            t += dt
-
-            # Out-Of-Time
-            if (perf_counter() - self.start_time) > 2*self.tf:
-                print('Time limit Exceeded')
-                return 0
-
-        # Return Trajectory Time
-        print(f'Final Time: {self.tf} | Execution Time: {perf_counter() - self.start_time}')
-        return (perf_counter() - self.start_time)
 
 class TrajectoryNavigationMir100Sim(TrajectoryNavigationMir100, Simulation):
     cmd = "roslaunch mir100_robot_server sim_robot_server.launch"
